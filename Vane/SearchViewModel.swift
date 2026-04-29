@@ -85,6 +85,10 @@ class SearchViewModel {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSearching else { return }
 
+        let bgTask = BGTaskHandle()
+        bgTask.begin(name: "VaneSearch")
+        defer { bgTask.end() }
+
         await MainActor.run {
             inputText = ""
             isSearching = true
