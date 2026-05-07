@@ -203,19 +203,19 @@ struct SearchBar: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 6) {
-                ForEach(SearchViewModel.OptimizationMode.allCases, id: \.self) { mode in
-                    Button { vm.optimizationMode = mode } label: {
-                        Label(mode.label, systemImage: mode.icon)
+                ForEach(SearchViewModel.SearchEngine.allCases, id: \.self) { engine in
+                    Button { vm.searchEngine = engine } label: {
+                        Label(engine.label, systemImage: engine.icon)
                             .font(.caption)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
                             .background(
-                                vm.optimizationMode == mode
+                                vm.searchEngine == engine
                                     ? Color.accentColor.opacity(0.15)
                                     : Color(.tertiarySystemBackground)
                             )
                             .foregroundStyle(
-                                vm.optimizationMode == mode ? Color.accentColor : .secondary
+                                vm.searchEngine == engine ? Color.accentColor : .secondary
                             )
                             .clipShape(Capsule())
                     }
@@ -224,8 +224,33 @@ struct SearchBar: View {
             }
             .padding(.horizontal)
 
+            if vm.searchEngine == .ai {
+                HStack(spacing: 6) {
+                    ForEach(SearchViewModel.OptimizationMode.allCases, id: \.self) { mode in
+                        Button { vm.optimizationMode = mode } label: {
+                            Label(mode.label, systemImage: mode.icon)
+                                .font(.caption)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(
+                                    vm.optimizationMode == mode
+                                        ? Color.accentColor.opacity(0.15)
+                                        : Color(.tertiarySystemBackground)
+                                )
+                                .foregroundStyle(
+                                    vm.optimizationMode == mode ? Color.accentColor : .secondary
+                                )
+                                .clipShape(Capsule())
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal)
+            }
+
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Ask anything…", text: $vm.inputText, axis: .vertical)
+                TextField(vm.searchEngine == .searxng ? "Search the web…" : "Ask anything…",
+                          text: $vm.inputText, axis: .vertical)
                     .lineLimit(1...4)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -262,22 +287,32 @@ struct SearchBar: View {
 struct SettingsSheet: View {
     @Bindable var vm: SearchViewModel
     @Environment(\.dismiss) var dismiss
-    @State private var draft = ""
+    @State private var serverDraft = ""
+    @State private var searxngDraft = ""
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("http://host:3000", text: $draft)
+                    TextField("http://host:3000", text: $serverDraft)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
-                } header: { Text("Server URL") } footer: {
-                    Text("Address of your Vane instance.")
+                } header: { Text("Vane Server URL") } footer: {
+                    Text("Address of your Vane instance (used for AI search).")
+                }
+                Section {
+                    TextField("https://search.example.com", text: $searxngDraft)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                } header: { Text("SearXNG URL") } footer: {
+                    Text("Address of a SearXNG instance with the JSON API enabled.")
                 }
                 Section {
                     Button("Save & Reconnect") {
-                        vm.serverURL = draft
+                        vm.serverURL = serverDraft
+                        vm.searxngURL = searxngDraft
                         Task { await vm.loadConfig() }
                         dismiss()
                     }
@@ -290,7 +325,10 @@ struct SettingsSheet: View {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .onAppear { draft = vm.serverURL }
+            .onAppear {
+                serverDraft = vm.serverURL
+                searxngDraft = vm.searxngURL
+            }
         }
     }
 }

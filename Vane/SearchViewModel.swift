@@ -22,6 +22,12 @@ class SearchViewModel {
     var serverURL: String {
         didSet { UserDefaults.standard.set(serverURL, forKey: "vaneServerURL") }
     }
+    var searxngURL: String {
+        didSet { UserDefaults.standard.set(searxngURL, forKey: "vaneSearxngURL") }
+    }
+    var searchEngine: SearchEngine {
+        didSet { UserDefaults.standard.set(searchEngine.rawValue, forKey: "vaneSearchEngine") }
+    }
     var optimizationMode: OptimizationMode = .balanced
     var inputText: String = ""
     var isSearching = false
@@ -48,8 +54,27 @@ class SearchViewModel {
         }
     }
 
+    enum SearchEngine: String, CaseIterable {
+        case ai, searxng
+        var label: String {
+            switch self {
+            case .ai:      return "AI"
+            case .searxng: return "SearXNG"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .ai:      return "sparkles"
+            case .searxng: return "magnifyingglass"
+            }
+        }
+    }
+
     init() {
         serverURL = UserDefaults.standard.string(forKey: "vaneServerURL") ?? "http://192.168.8.117:3000"
+        searxngURL = UserDefaults.standard.string(forKey: "vaneSearxngURL") ?? "https://search-vpn.stacknest.me"
+        let engineRaw = UserDefaults.standard.string(forKey: "vaneSearchEngine") ?? SearchEngine.ai.rawValue
+        searchEngine = SearchEngine(rawValue: engineRaw) ?? .ai
     }
 
     func loadConfig() async {
@@ -95,6 +120,16 @@ class SearchViewModel {
             messages.append(VaneMessage(query: text))
         }
         let msgIndex = await MainActor.run { messages.count - 1 }
+
+        switch searchEngine {
+        case .ai:
+            await searchAI(text: text, msgIndex: msgIndex)
+        case .searxng:
+            await searchSearxng(text: text, msgIndex: msgIndex)
+        }
+    }
+
+    private func searchAI(text: String, msgIndex: Int) async {
         let messageId = UUID().uuidString
 
         guard let url = URL(string: "\(serverURL)/api/chat") else {
@@ -180,6 +215,70 @@ class SearchViewModel {
         }
         history.append(["human", text])
         history.append(["assistant", finalResponse])
+    }
+
+    private func searchSearxng(text: String, msgIndex: Int) async {
+        let base = searxngURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        var components = URLComponents(string: "\(base)/search")
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: text),
+            URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "safesearch", value: "0")
+        ]
+
+        guard let url = components?.url else {
+            await MainActor.run {
+                messages[msgIndex].response = "Error: invalid SearXNG URL"
+                messages[msgIndex].isSearching = false
+                messages[msgIndex].isResearching = false
+                isSearching = false
+            }
+            return
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("Vane/1.0", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 60
+
+        struct SearxngResp: Decodable {
+            struct Result: Decodable {
+                let title: String?
+                let url: String?
+                let content: String?
+            }
+            let results: [Result]
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                throw NSError(domain: "SearXNG", code: http.statusCode,
+                              userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
+            }
+            let decoded = try JSONDecoder().decode(SearxngResp.self, from: data)
+            let sources: [VaneSource] = decoded.results.compactMap { r in
+                guard let title = r.title, let url = r.url else { return nil }
+                return VaneSource(title: title, url: url, snippet: r.content ?? "")
+            }
+            await MainActor.run {
+                messages[msgIndex].sources = sources
+                if sources.isEmpty {
+                    messages[msgIndex].response = "No results found."
+                }
+            }
+        } catch {
+            await MainActor.run {
+                messages[msgIndex].response = "Error: \(error.localizedDescription)"
+            }
+        }
+
+        await MainActor.run {
+            messages[msgIndex].isSearching = false
+            messages[msgIndex].isResearching = false
+            isSearching = false
+        }
     }
 
     func newChat() {
