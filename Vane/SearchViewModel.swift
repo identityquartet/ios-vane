@@ -46,9 +46,6 @@ class SearchViewModel {
     }
     var optimizationMode: OptimizationMode = .balanced
 
-    var searxInstance: SearchInstance {
-        didSet { UserDefaults.standard.set(searxInstance.rawValue, forKey: "vaneSearxInstance") }
-    }
     var searxCategory: SearchCategory {
         didSet { UserDefaults.standard.set(searxCategory.rawValue, forKey: "vaneSearxCategory") }
     }
@@ -95,30 +92,30 @@ class SearchViewModel {
     }
 
     enum SearchEngine: String, CaseIterable {
-        case ai, searxng
+        case ai, searchVPN, searchTor
         var label: String {
             switch self {
-            case .ai:      return "AI"
-            case .searxng: return "SearXNG"
+            case .ai:        return "AI"
+            case .searchVPN: return "VPN"
+            case .searchTor: return "Tor"
             }
         }
         var icon: String {
             switch self {
-            case .ai:      return "sparkles"
-            case .searxng: return "magnifyingglass"
+            case .ai:        return "sparkles"
+            case .searchVPN: return "shield.fill"
+            case .searchTor: return "network"
             }
         }
-    }
-
-    enum SearchInstance: String, CaseIterable {
-        case vpn = "https://search-vpn.stacknest.me"
-        case tor = "https://search.stacknest.me"
-        var label: String {
-            switch self { case .vpn: return "VPN"; case .tor: return "Tor" }
+        var searxBaseURL: String? {
+            switch self {
+            case .ai:        return nil
+            case .searchVPN: return "https://search-vpn.stacknest.me"
+            case .searchTor: return "https://search.stacknest.me"
+            }
         }
-        var icon: String {
-            switch self { case .vpn: return "shield.fill"; case .tor: return "network" }
-        }
+        var isSearx: Bool { self != .ai }
+        var searxTimeout: TimeInterval { self == .searchTor ? 90 : 30 }
     }
 
     enum SearchCategory: String, CaseIterable {
@@ -165,8 +162,6 @@ class SearchViewModel {
         let engineRaw = UserDefaults.standard.string(forKey: "vaneSearchEngine") ?? SearchEngine.ai.rawValue
         searchEngine = SearchEngine(rawValue: engineRaw) ?? .ai
 
-        let savedInst = UserDefaults.standard.string(forKey: "vaneSearxInstance") ?? SearchInstance.vpn.rawValue
-        searxInstance = SearchInstance(rawValue: savedInst) ?? .vpn
         let savedCat = UserDefaults.standard.string(forKey: "vaneSearxCategory") ?? SearchCategory.general.rawValue
         searxCategory = SearchCategory(rawValue: savedCat) ?? .general
         let savedTime = UserDefaults.standard.string(forKey: "vaneSearxTimeRange") ?? TimeRange.anytime.rawValue
@@ -208,8 +203,8 @@ class SearchViewModel {
 
     func search() async {
         switch searchEngine {
-        case .ai:      await searchAIMode()
-        case .searxng: await searchSearxngMode()
+        case .ai:                      await searchAIMode()
+        case .searchVPN, .searchTor:   await searchSearxngMode()
         }
     }
 
@@ -339,7 +334,11 @@ class SearchViewModel {
             errorMessage = nil
         }
 
-        var comps = URLComponents(string: "\(searxInstance.rawValue)/search")!
+        guard let baseURL = searchEngine.searxBaseURL else {
+            await MainActor.run { searxIsSearching = false }
+            return
+        }
+        var comps = URLComponents(string: "\(baseURL)/search")!
         var params: [URLQueryItem] = [
             .init(name: "q",          value: q),
             .init(name: "format",     value: "json"),
@@ -355,7 +354,7 @@ class SearchViewModel {
         }
 
         var req = URLRequest(url: url)
-        req.timeoutInterval = searxInstance == .tor ? 90 : 30
+        req.timeoutInterval = searchEngine.searxTimeout
 
         do {
             let (data, _) = try await URLSession.shared.data(for: req)

@@ -7,7 +7,7 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if vm.searchEngine == .searxng {
+                if vm.searchEngine.isSearx {
                     searxContent
                 } else {
                     aiContent
@@ -19,7 +19,7 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if vm.searchEngine == .searxng {
+                    if vm.searchEngine.isSearx {
                         if !vm.searxResults.isEmpty || vm.searxIsSearching {
                             Button { vm.clearSearxSearch() } label: {
                                 Image(systemName: "xmark")
@@ -32,7 +32,7 @@ struct ContentView: View {
                         .disabled(vm.messages.isEmpty)
                     }
                 }
-                if vm.searchEngine == .searxng {
+                if vm.searchEngine.isSearx {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
                             Picker("Time Range", selection: $vm.searxTimeRange) {
@@ -475,7 +475,7 @@ struct SearchBar: View {
             .padding(.top, 8)
 
             // SearXNG: category scroll
-            if vm.searchEngine == .searxng {
+            if vm.searchEngine.isSearx {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(SearchViewModel.SearchCategory.allCases, id: \.self) { cat in
@@ -500,7 +500,7 @@ struct SearchBar: View {
 
             VStack(spacing: 8) {
                 // AI: optimization mode
-                if vm.searchEngine == .ai {
+                if !vm.searchEngine.isSearx {
                     HStack(spacing: 6) {
                         ForEach(SearchViewModel.OptimizationMode.allCases, id: \.self) { mode in
                             Button { vm.optimizationMode = mode } label: {
@@ -525,7 +525,7 @@ struct SearchBar: View {
 
                 // Input row
                 HStack(alignment: .bottom, spacing: 8) {
-                    if vm.searchEngine == .searxng {
+                    if vm.searchEngine.isSearx {
                         HStack(spacing: 8) {
                             Image(systemName: "magnifyingglass")
                                 .foregroundStyle(.secondary)
@@ -565,28 +565,6 @@ struct SearchBar: View {
                     .disabled(!canSend)
                 }
 
-                // SearXNG: instance row (VPN / Tor)
-                if vm.searchEngine == .searxng {
-                    HStack(spacing: 0) {
-                        ForEach(SearchViewModel.SearchInstance.allCases, id: \.self) { inst in
-                            Button { vm.searxInstance = inst } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: inst.icon).font(.caption2.weight(.medium))
-                                    Text(inst.label).font(.caption.weight(.medium))
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 7)
-                                .background(vm.searxInstance == inst ? Color.accentColor.opacity(0.12) : Color.clear)
-                                .foregroundStyle(vm.searxInstance == inst ? Color.accentColor : Color.secondary)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .background(Color(.tertiarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .animation(.easeInOut(duration: 0.15), value: vm.searxInstance)
-                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -596,7 +574,7 @@ struct SearchBar: View {
 
     private var canSend: Bool {
         guard !vm.inputText.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
-        return vm.searchEngine == .ai ? !vm.isSearching : !vm.searxIsSearching
+        return vm.searchEngine.isSearx ? !vm.searxIsSearching : !vm.isSearching
     }
 
     private func submit() {
