@@ -7,10 +7,10 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if vm.messages.isEmpty {
-                    WelcomeView()
+                if vm.searchEngine == .searxng {
+                    searxContent
                 } else {
-                    ConversationView(vm: vm)
+                    aiContent
                 }
                 Divider()
                 SearchBar(vm: vm)
@@ -19,10 +19,31 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { vm.newChat() } label: {
-                        Image(systemName: "square.and.pencil")
+                    if vm.searchEngine == .searxng {
+                        if !vm.searxResults.isEmpty || vm.searxIsSearching {
+                            Button { vm.clearSearxSearch() } label: {
+                                Image(systemName: "xmark")
+                            }
+                        }
+                    } else {
+                        Button { vm.newChat() } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .disabled(vm.messages.isEmpty)
                     }
-                    .disabled(vm.messages.isEmpty)
+                }
+                if vm.searchEngine == .searxng {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Picker("Time Range", selection: $vm.searxTimeRange) {
+                                ForEach(SearchViewModel.TimeRange.allCases, id: \.self) { t in
+                                    Text(t.label).tag(t)
+                                }
+                            }
+                        } label: {
+                            Image(systemName: vm.searxTimeRange == .anytime ? "clock" : "clock.badge.checkmark")
+                        }
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: {
@@ -30,13 +51,37 @@ struct ContentView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showSettings) { SettingsSheet(vm: vm) }
+            .alert("Error", isPresented: .constant(vm.errorMessage != nil)) {
+                Button("OK") { vm.errorMessage = nil }
+            } message: { Text(vm.errorMessage ?? "") }
         }
-        .sheet(isPresented: $showSettings) { SettingsSheet(vm: vm) }
         .task { await vm.loadConfig() }
+    }
+
+    @ViewBuilder
+    private var aiContent: some View {
+        if vm.messages.isEmpty {
+            WelcomeView()
+        } else {
+            ConversationView(vm: vm)
+        }
+    }
+
+    @ViewBuilder
+    private var searxContent: some View {
+        if vm.searxResults.isEmpty && !vm.searxIsSearching {
+            SearxEmptyState()
+        } else if vm.searxCategory == .images {
+            ImageGrid(results: vm.searxResults)
+        } else {
+            SearxResultList(vm: vm)
+        }
     }
 }
 
-// MARK: - Welcome
+// MARK: - AI: Welcome
+
 struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 16) {
@@ -53,7 +98,8 @@ struct WelcomeView: View {
     }
 }
 
-// MARK: - Conversation
+// MARK: - AI: Conversation
+
 struct ConversationView: View {
     @Bindable var vm: SearchViewModel
 
@@ -83,13 +129,13 @@ struct ConversationView: View {
     }
 }
 
-// MARK: - Message
+// MARK: - AI: Message
+
 struct MessageView: View {
     let message: VaneMessage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // User query
             HStack {
                 Spacer(minLength: 60)
                 Text(message.query)
@@ -100,7 +146,6 @@ struct MessageView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18))
             }
 
-            // Response area
             if message.isResearching && message.response.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().scaleEffect(0.75)
@@ -124,7 +169,6 @@ struct MessageView: View {
                     .padding(.top, 2)
             }
 
-            // Sources
             if !message.sources.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("SOURCES")
@@ -145,7 +189,8 @@ struct MessageView: View {
     }
 }
 
-// MARK: - Source card
+// MARK: - AI: Source card
+
 struct SourceCard: View {
     let number: Int
     let source: VaneSource
@@ -195,13 +240,217 @@ struct SourceCard: View {
     }
 }
 
+// MARK: - SearXNG: Empty state
+
+struct SearxEmptyState: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "globe")
+                .font(.system(size: 60, weight: .thin))
+                .foregroundStyle(.quaternary)
+            Text("Private · Open source · No tracking")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+            Spacer()
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - SearXNG: Result list
+
+struct SearxResultList: View {
+    @Bindable var vm: SearchViewModel
+
+    var body: some View {
+        List {
+            if vm.searxIsSearching {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Searching…").font(.subheadline).foregroundStyle(.secondary)
+                }
+                .listRowSeparator(.hidden)
+                .padding(.vertical, 4)
+            }
+
+            if !vm.searxAnswers.isEmpty {
+                Section {
+                    ForEach(vm.searxAnswers, id: \.self) { ans in
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            Text(ans).font(.body)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
+            Section {
+                ForEach(vm.searxResults) { r in ResultRow(result: r) }
+            } header: {
+                if vm.searxTotalResults > 0 {
+                    Text("\(vm.searxTotalResults.formatted()) results")
+                        .font(.caption).foregroundStyle(.tertiary).textCase(nil)
+                }
+            }
+
+            if !vm.searxSuggestions.isEmpty {
+                Section("Also try") {
+                    ForEach(vm.searxSuggestions.prefix(5), id: \.self) { s in
+                        Button {
+                            vm.inputText = s
+                            Task { await vm.search() }
+                        } label: {
+                            HStack {
+                                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.subheadline)
+                                Text(s).foregroundStyle(.primary)
+                                Spacer()
+                                Image(systemName: "arrow.up.left").foregroundStyle(.tertiary).font(.caption)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
+    }
+}
+
+// MARK: - SearXNG: Result row
+
+struct ResultRow: View {
+    let result: SearchResult
+
+    var body: some View {
+        Button {
+            if let url = URL(string: result.url) { UIApplication.shared.open(url) }
+        } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(result.displayHost)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(result.title)
+                    .font(.body.weight(.medium)).foregroundStyle(.primary)
+                    .lineLimit(2).multilineTextAlignment(.leading)
+                if !result.content.isEmpty {
+                    Text(result.content)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(3).multilineTextAlignment(.leading)
+                }
+                if let date = result.publishedDate, !date.isEmpty {
+                    Text(shortDate(date))
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                if !result.engines.isEmpty {
+                    EngineTagsRow(engines: result.engines)
+                }
+            }
+            .padding(.vertical, 3)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button { UIPasteboard.general.string = result.url } label: {
+                Label("Copy URL", systemImage: "link")
+            }
+            Button {
+                if let url = URL(string: result.url) { UIApplication.shared.open(url) }
+            } label: {
+                Label("Open in Safari", systemImage: "safari")
+            }
+            ShareLink(item: URL(string: result.url)!) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+        }
+    }
+
+    private func shortDate(_ s: String) -> String {
+        let fmts = ["yyyy-MM-dd'T'HH:mm:ssZ", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd"]
+        let df = DateFormatter()
+        for fmt in fmts {
+            df.dateFormat = fmt
+            if let d = df.date(from: s) {
+                let rf = RelativeDateTimeFormatter()
+                rf.unitsStyle = .abbreviated
+                return rf.localizedString(for: d, relativeTo: Date())
+            }
+        }
+        return String(s.prefix(10))
+    }
+}
+
+// MARK: - SearXNG: Engine tags
+
+struct EngineTagsRow: View {
+    let engines: [String]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(engines, id: \.self) { engine in
+                    Text(engine.capitalized)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(.tertiarySystemBackground))
+                        .clipShape(Capsule())
+                        .overlay(Capsule().strokeBorder(Color(.separator), lineWidth: 0.5))
+                }
+            }
+        }
+        .padding(.top, 1)
+    }
+}
+
+// MARK: - SearXNG: Image grid
+
+struct ImageGrid: View {
+    let results: [SearchResult]
+    let cols = [GridItem(.adaptive(minimum: 150), spacing: 3)]
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: cols, spacing: 3) {
+                ForEach(results) { r in
+                    Button {
+                        if let url = URL(string: r.url) { UIApplication.shared.open(url) }
+                    } label: {
+                        AsyncImage(url: URL(string: r.thumbnailSrc ?? r.imgSrc ?? "")) { phase in
+                            switch phase {
+                            case .success(let img):
+                                img.resizable().aspectRatio(contentMode: .fill)
+                                    .frame(height: 140).clipped()
+                            case .failure, .empty:
+                                Color(.systemGray5).frame(height: 140)
+                                    .overlay { Image(systemName: "photo").foregroundStyle(.tertiary) }
+                            @unknown default: EmptyView()
+                            }
+                        }
+                        .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        ShareLink(item: URL(string: r.url)!) {
+                            Label("Share Page", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                }
+            }
+            .padding(3)
+        }
+    }
+}
+
 // MARK: - Search bar
+
 struct SearchBar: View {
     @Bindable var vm: SearchViewModel
     @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
+            // Engine toggle
             HStack(spacing: 6) {
                 ForEach(SearchViewModel.SearchEngine.allCases, id: \.self) { engine in
                     Button { vm.searchEngine = engine } label: {
@@ -222,59 +471,132 @@ struct SearchBar: View {
                 }
                 Spacer()
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
 
-            if vm.searchEngine == .ai {
-                HStack(spacing: 6) {
-                    ForEach(SearchViewModel.OptimizationMode.allCases, id: \.self) { mode in
-                        Button { vm.optimizationMode = mode } label: {
-                            Label(mode.label, systemImage: mode.icon)
-                                .font(.caption)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(
-                                    vm.optimizationMode == mode
-                                        ? Color.accentColor.opacity(0.15)
-                                        : Color(.tertiarySystemBackground)
-                                )
-                                .foregroundStyle(
-                                    vm.optimizationMode == mode ? Color.accentColor : .secondary
-                                )
-                                .clipShape(Capsule())
+            // SearXNG: category scroll
+            if vm.searchEngine == .searxng {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(SearchViewModel.SearchCategory.allCases, id: \.self) { cat in
+                            Button {
+                                vm.searxCategory = cat
+                                if !vm.searxResults.isEmpty { Task { await vm.search() } }
+                            } label: {
+                                Label(cat.label, systemImage: cat.icon)
+                                    .font(.caption.weight(.medium))
+                                    .padding(.horizontal, 11).padding(.vertical, 6)
+                                    .background(vm.searxCategory == cat ? Color.accentColor : Color(.tertiarySystemBackground))
+                                    .foregroundStyle(vm.searxCategory == cat ? .white : .secondary)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .animation(.easeInOut(duration: 0.15), value: vm.searxCategory)
                         }
                     }
-                    Spacer()
+                    .padding(.horizontal, 16).padding(.vertical, 8)
                 }
-                .padding(.horizontal)
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField(vm.searchEngine == .searxng ? "Search the web…" : "Ask anything…",
-                          text: $vm.inputText, axis: .vertical)
-                    .lineLimit(1...4)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .focused($focused)
-                    .disabled(vm.isSearching)
-                    .onSubmit { submit() }
-
-                Button { submit() } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 34))
-                        .foregroundStyle(canSend ? Color.accentColor : .gray)
+            VStack(spacing: 8) {
+                // AI: optimization mode
+                if vm.searchEngine == .ai {
+                    HStack(spacing: 6) {
+                        ForEach(SearchViewModel.OptimizationMode.allCases, id: \.self) { mode in
+                            Button { vm.optimizationMode = mode } label: {
+                                Label(mode.label, systemImage: mode.icon)
+                                    .font(.caption)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        vm.optimizationMode == mode
+                                            ? Color.accentColor.opacity(0.15)
+                                            : Color(.tertiarySystemBackground)
+                                    )
+                                    .foregroundStyle(
+                                        vm.optimizationMode == mode ? Color.accentColor : .secondary
+                                    )
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        Spacer()
+                    }
                 }
-                .disabled(!canSend)
+
+                // Input row
+                HStack(alignment: .bottom, spacing: 8) {
+                    if vm.searchEngine == .searxng {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(.secondary)
+                                .font(.system(size: 15))
+                            TextField("Search…", text: $vm.inputText)
+                                .focused($focused)
+                                .submitLabel(.search)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .onSubmit { submit() }
+                            if !vm.inputText.isEmpty {
+                                Button { vm.inputText = "" } label: {
+                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 10)
+                        .background(Color(.secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    } else {
+                        TextField("Ask anything…", text: $vm.inputText, axis: .vertical)
+                            .lineLimit(1...4)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color(.secondarySystemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                            .focused($focused)
+                            .disabled(vm.isSearching)
+                            .onSubmit { submit() }
+                    }
+
+                    Button { submit() } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 34))
+                            .foregroundStyle(canSend ? Color.accentColor : .gray)
+                    }
+                    .disabled(!canSend)
+                }
+
+                // SearXNG: instance row (VPN / Tor)
+                if vm.searchEngine == .searxng {
+                    HStack(spacing: 0) {
+                        ForEach(SearchViewModel.SearchInstance.allCases, id: \.self) { inst in
+                            Button { vm.searxInstance = inst } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: inst.icon).font(.caption2.weight(.medium))
+                                    Text(inst.label).font(.caption.weight(.medium))
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 7)
+                                .background(vm.searxInstance == inst ? Color.accentColor.opacity(0.12) : Color.clear)
+                                .foregroundStyle(vm.searxInstance == inst ? Color.accentColor : Color.secondary)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .background(Color(.tertiarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .animation(.easeInOut(duration: 0.15), value: vm.searxInstance)
+                }
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
             .padding(.bottom, 8)
         }
-        .padding(.top, 8)
     }
 
     private var canSend: Bool {
-        !vm.inputText.trimmingCharacters(in: .whitespaces).isEmpty && !vm.isSearching
+        guard !vm.inputText.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        return vm.searchEngine == .ai ? !vm.isSearching : !vm.searxIsSearching
     }
 
     private func submit() {
@@ -284,11 +606,11 @@ struct SearchBar: View {
 }
 
 // MARK: - Settings
+
 struct SettingsSheet: View {
     @Bindable var vm: SearchViewModel
     @Environment(\.dismiss) var dismiss
     @State private var serverDraft = ""
-    @State private var searxngDraft = ""
 
     var body: some View {
         NavigationStack {
@@ -302,17 +624,8 @@ struct SettingsSheet: View {
                     Text("Address of your Vane instance (used for AI search).")
                 }
                 Section {
-                    TextField("https://search.example.com", text: $searxngDraft)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                } header: { Text("SearXNG URL") } footer: {
-                    Text("Address of a SearXNG instance with the JSON API enabled.")
-                }
-                Section {
                     Button("Save & Reconnect") {
                         vm.serverURL = serverDraft
-                        vm.searxngURL = searxngDraft
                         Task { await vm.loadConfig() }
                         dismiss()
                     }
@@ -325,10 +638,7 @@ struct SettingsSheet: View {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .onAppear {
-                serverDraft = vm.serverURL
-                searxngDraft = vm.searxngURL
-            }
+            .onAppear { serverDraft = vm.serverURL }
         }
     }
 }

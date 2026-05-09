@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Models
+
 struct VaneSource: Identifiable {
     let id = UUID()
     let title: String
@@ -17,30 +19,68 @@ struct VaneMessage: Identifiable {
     var isResearching: Bool = true
 }
 
+struct SearchResult: Identifiable {
+    let id = UUID()
+    let title: String
+    let url: String
+    let content: String
+    let engines: [String]
+    let publishedDate: String?
+    let imgSrc: String?
+    let thumbnailSrc: String?
+    var displayHost: String { URL(string: url)?.host ?? url }
+}
+
+// MARK: - ViewModel
+
 @Observable
 class SearchViewModel {
+
+    // MARK: Persisted settings
+
     var serverURL: String {
         didSet { UserDefaults.standard.set(serverURL, forKey: "vaneServerURL") }
-    }
-    var searxngURL: String {
-        didSet { UserDefaults.standard.set(searxngURL, forKey: "vaneSearxngURL") }
     }
     var searchEngine: SearchEngine {
         didSet { UserDefaults.standard.set(searchEngine.rawValue, forKey: "vaneSearchEngine") }
     }
     var optimizationMode: OptimizationMode = .balanced
+
+    var searxInstance: SearchInstance {
+        didSet { UserDefaults.standard.set(searxInstance.rawValue, forKey: "vaneSearxInstance") }
+    }
+    var searxCategory: SearchCategory {
+        didSet { UserDefaults.standard.set(searxCategory.rawValue, forKey: "vaneSearxCategory") }
+    }
+    var searxTimeRange: TimeRange {
+        didSet { UserDefaults.standard.set(searxTimeRange.rawValue, forKey: "vaneSearxTimeRange") }
+    }
+
+    // MARK: AI state
+
     var inputText: String = ""
     var isSearching = false
     var messages: [VaneMessage] = []
     var errorMessage: String?
 
+    // MARK: SearXNG state
+
+    var searxResults: [SearchResult] = []
+    var searxAnswers: [String] = []
+    var searxSuggestions: [String] = []
+    var searxTotalResults: Int = 0
+    var searxIsSearching = false
+
+    // MARK: AI internals
+
     private var chatProviderId = "d8822e61-4d9c-4fc4-a81e-5bf35cc68d45"
     private var chatModelKey = "Qwen3-8B"
     private var embeddingProviderId = "8fe18210-2a23-4878-b43e-e7b037019f1c"
     private var embeddingModelKey = "Xenova/all-MiniLM-L6-v2"
-
     private var sessionChatId = UUID().uuidString
     private var history: [([String])] = []
+
+    // MARK: - Enums
 
     enum OptimizationMode: String, CaseIterable {
         case speed, balanced, quality
@@ -70,12 +110,70 @@ class SearchViewModel {
         }
     }
 
+    enum SearchInstance: String, CaseIterable {
+        case vpn = "https://search-vpn.stacknest.me"
+        case tor = "https://search.stacknest.me"
+        var label: String {
+            switch self { case .vpn: return "VPN"; case .tor: return "Tor" }
+        }
+        var icon: String {
+            switch self { case .vpn: return "shield.fill"; case .tor: return "network" }
+        }
+    }
+
+    enum SearchCategory: String, CaseIterable {
+        case general, news, images, videos, science, it
+        var label: String {
+            switch self {
+            case .general: return "All"
+            case .news:    return "News"
+            case .images:  return "Images"
+            case .videos:  return "Videos"
+            case .science: return "Science"
+            case .it:      return "Tech"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .general: return "magnifyingglass"
+            case .news:    return "newspaper"
+            case .images:  return "photo"
+            case .videos:  return "play.rectangle"
+            case .science: return "flask"
+            case .it:      return "terminal"
+            }
+        }
+    }
+
+    enum TimeRange: String, CaseIterable {
+        case anytime = "", day, week, month, year
+        var label: String {
+            switch self {
+            case .anytime: return "Any time"
+            case .day:     return "Past day"
+            case .week:    return "Past week"
+            case .month:   return "Past month"
+            case .year:    return "Past year"
+            }
+        }
+    }
+
+    // MARK: - Init
+
     init() {
         serverURL = UserDefaults.standard.string(forKey: "vaneServerURL") ?? "http://192.168.8.117:3000"
-        searxngURL = UserDefaults.standard.string(forKey: "vaneSearxngURL") ?? "https://search-vpn.stacknest.me"
         let engineRaw = UserDefaults.standard.string(forKey: "vaneSearchEngine") ?? SearchEngine.ai.rawValue
         searchEngine = SearchEngine(rawValue: engineRaw) ?? .ai
+
+        let savedInst = UserDefaults.standard.string(forKey: "vaneSearxInstance") ?? SearchInstance.vpn.rawValue
+        searxInstance = SearchInstance(rawValue: savedInst) ?? .vpn
+        let savedCat = UserDefaults.standard.string(forKey: "vaneSearxCategory") ?? SearchCategory.general.rawValue
+        searxCategory = SearchCategory(rawValue: savedCat) ?? .general
+        let savedTime = UserDefaults.standard.string(forKey: "vaneSearxTimeRange") ?? TimeRange.anytime.rawValue
+        searxTimeRange = TimeRange(rawValue: savedTime) ?? .anytime
     }
+
+    // MARK: - Config
 
     func loadConfig() async {
         guard let url = URL(string: "\(serverURL)/api/config") else { return }
@@ -106,7 +204,18 @@ class SearchViewModel {
         }
     }
 
+    // MARK: - Search dispatch
+
     func search() async {
+        switch searchEngine {
+        case .ai:      await searchAIMode()
+        case .searxng: await searchSearxngMode()
+        }
+    }
+
+    // MARK: - AI search
+
+    private func searchAIMode() async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSearching else { return }
 
@@ -120,13 +229,7 @@ class SearchViewModel {
             messages.append(VaneMessage(query: text))
         }
         let msgIndex = await MainActor.run { messages.count - 1 }
-
-        switch searchEngine {
-        case .ai:
-            await searchAI(text: text, msgIndex: msgIndex)
-        case .searxng:
-            await searchSearxng(text: text, msgIndex: msgIndex)
-        }
+        await searchAI(text: text, msgIndex: msgIndex)
     }
 
     private func searchAI(text: String, msgIndex: Int) async {
@@ -217,69 +320,96 @@ class SearchViewModel {
         history.append(["assistant", finalResponse])
     }
 
-    private func searchSearxng(text: String, msgIndex: Int) async {
-        let base = searxngURL.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
-        var components = URLComponents(string: "\(base)/search")
-        components?.queryItems = [
-            URLQueryItem(name: "q", value: text),
-            URLQueryItem(name: "format", value: "json"),
-            URLQueryItem(name: "safesearch", value: "0")
-        ]
+    // MARK: - SearXNG search
 
-        guard let url = components?.url else {
-            await MainActor.run {
-                messages[msgIndex].response = "Error: invalid SearXNG URL"
-                messages[msgIndex].isSearching = false
-                messages[msgIndex].isResearching = false
-                isSearching = false
-            }
+    private func searchSearxngMode() async {
+        let q = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty, !searxIsSearching else { return }
+
+        let bgTask = BGTaskHandle()
+        bgTask.begin(name: "SearxSearch")
+        defer { bgTask.end() }
+
+        await MainActor.run {
+            searxIsSearching = true
+            searxResults = []
+            searxAnswers = []
+            searxSuggestions = []
+            searxTotalResults = 0
+            errorMessage = nil
+        }
+
+        var comps = URLComponents(string: "\(searxInstance.rawValue)/search")!
+        var params: [URLQueryItem] = [
+            .init(name: "q",          value: q),
+            .init(name: "format",     value: "json"),
+            .init(name: "categories", value: searxCategory.rawValue),
+        ]
+        if !searxTimeRange.rawValue.isEmpty {
+            params.append(.init(name: "time_range", value: searxTimeRange.rawValue))
+        }
+        comps.queryItems = params
+        guard let url = comps.url else {
+            await MainActor.run { searxIsSearching = false }
             return
         }
 
         var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("Vane/1.0", forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 60
-
-        struct SearxngResp: Decodable {
-            struct Result: Decodable {
-                let title: String?
-                let url: String?
-                let content: String?
-            }
-            let results: [Result]
-        }
+        req.timeoutInterval = searxInstance == .tor ? 90 : 30
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw NSError(domain: "SearXNG", code: http.statusCode,
-                              userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
+            let (data, _) = try await URLSession.shared.data(for: req)
+
+            struct Resp: Decodable {
+                struct R: Decodable {
+                    let title: String
+                    let url: String
+                    let content: String?
+                    let engines: [String]?
+                    let publishedDate: String?
+                    let img_src: String?
+                    let thumbnail_src: String?
+                }
+                struct Ans: Decodable {
+                    let answer: String?
+                }
+                let results: [R]
+                let answers: [Ans]?
+                let suggestions: [String]?
+                let number_of_results: Double?
             }
-            let decoded = try JSONDecoder().decode(SearxngResp.self, from: data)
-            let sources: [VaneSource] = decoded.results.compactMap { r in
-                guard let title = r.title, let url = r.url else { return nil }
-                return VaneSource(title: title, url: url, snippet: r.content ?? "")
+
+            let resp = try JSONDecoder().decode(Resp.self, from: data)
+            let mapped = resp.results.map {
+                SearchResult(
+                    title: $0.title, url: $0.url, content: $0.content ?? "",
+                    engines: $0.engines ?? [], publishedDate: $0.publishedDate,
+                    imgSrc: $0.img_src.flatMap { $0.isEmpty ? nil : $0 },
+                    thumbnailSrc: $0.thumbnail_src.flatMap { $0.isEmpty ? nil : $0 }
+                )
             }
             await MainActor.run {
-                messages[msgIndex].sources = sources
-                if sources.isEmpty {
-                    messages[msgIndex].response = "No results found."
-                }
+                searxResults = mapped
+                searxAnswers = resp.answers?.compactMap { $0.answer } ?? []
+                searxSuggestions = resp.suggestions ?? []
+                searxTotalResults = Int(resp.number_of_results ?? 0)
+                searxIsSearching = false
             }
         } catch {
-            await MainActor.run {
-                messages[msgIndex].response = "Error: \(error.localizedDescription)"
-            }
-        }
-
-        await MainActor.run {
-            messages[msgIndex].isSearching = false
-            messages[msgIndex].isResearching = false
-            isSearching = false
+            await MainActor.run { errorMessage = error.localizedDescription; searxIsSearching = false }
         }
     }
+
+    func clearSearxSearch() {
+        searxResults = []
+        searxAnswers = []
+        searxSuggestions = []
+        inputText = ""
+        searxTotalResults = 0
+        errorMessage = nil
+    }
+
+    // MARK: - AI chat management
 
     func newChat() {
         messages = []
