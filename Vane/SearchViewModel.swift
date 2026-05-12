@@ -70,6 +70,7 @@ class SearchViewModel {
 
     // MARK: AI internals
 
+    private var activeSearchTask: Task<Void, Never>?
     private var chatProviderId = "d8822e61-4d9c-4fc4-a81e-5bf35cc68d45"
     private var chatModelKey = "Qwen3-8B"
     private var embeddingProviderId = "8fe18210-2a23-4878-b43e-e7b037019f1c"
@@ -201,7 +202,25 @@ class SearchViewModel {
 
     // MARK: - Search dispatch
 
-    func search() async {
+    func startSearch() {
+        activeSearchTask?.cancel()
+        activeSearchTask = Task { await search() }
+    }
+
+    func cancelSearch() {
+        activeSearchTask?.cancel()
+        activeSearchTask = nil
+        isSearching = false
+        searxIsSearching = false
+        if let last = messages.indices.last {
+            messages[last].isSearching = false
+            messages[last].isResearching = false
+        }
+    }
+
+    var isProcessing: Bool { isSearching || searxIsSearching }
+
+    private func search() async {
         switch searchEngine {
         case .ai:                      await searchAIMode()
         case .searchVPN, .searchTor:   await searchSearxngMode()

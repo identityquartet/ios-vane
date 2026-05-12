@@ -102,6 +102,7 @@ struct WelcomeView: View {
 
 struct ConversationView: View {
     @Bindable var vm: SearchViewModel
+    @State private var followLatest = true
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -113,14 +114,19 @@ struct ConversationView: View {
                 }
                 .padding()
             }
+            .onScrollGeometryChange(for: Bool.self) { geo in
+                geo.contentSize.height - geo.visibleRect.maxY < 80
+            } action: { _, isAtBottom in
+                followLatest = isAtBottom
+            }
             .onChange(of: vm.messages.last?.response) {
-                if let last = vm.messages.last {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+                guard followLatest, let last = vm.messages.last else { return }
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
             .onChange(of: vm.messages.count) {
+                followLatest = true
                 if let last = vm.messages.last {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
@@ -557,12 +563,20 @@ struct SearchBar: View {
                             .onSubmit { submit() }
                     }
 
-                    Button { submit() } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 34))
-                            .foregroundStyle(canSend ? Color.accentColor : .gray)
+                    if vm.isProcessing {
+                        Button { vm.cancelSearch() } label: {
+                            Image(systemName: "stop.circle.fill")
+                                .font(.system(size: 34))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    } else {
+                        Button { submit() } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 34))
+                                .foregroundStyle(canSend ? Color.accentColor : .gray)
+                        }
+                        .disabled(!canSend)
                     }
-                    .disabled(!canSend)
                 }
 
             }
@@ -579,7 +593,7 @@ struct SearchBar: View {
 
     private func submit() {
         focused = false
-        Task { await vm.search() }
+        vm.startSearch()
     }
 }
 
