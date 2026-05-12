@@ -111,13 +111,11 @@ struct ConversationView: View {
                     ForEach(vm.messages) { msg in
                         MessageView(message: msg).id(msg.id)
                     }
+                    Color.clear.frame(height: 1).id("_bottom")
+                        .onAppear { followLatest = true }
+                        .onDisappear { followLatest = false }
                 }
                 .padding()
-            }
-            .onScrollGeometryChange(for: Bool.self) { geo in
-                geo.contentSize.height - geo.visibleRect.maxY < 80
-            } action: { _, isAtBottom in
-                followLatest = isAtBottom
             }
             .onChange(of: vm.messages.last?.response) {
                 guard followLatest, let last = vm.messages.last else { return }
@@ -307,7 +305,7 @@ struct SearxResultList: View {
                     ForEach(vm.searxSuggestions.prefix(5), id: \.self) { s in
                         Button {
                             vm.inputText = s
-                            Task { await vm.search() }
+                            vm.startSearch()
                         } label: {
                             HStack {
                                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.subheadline)
@@ -487,7 +485,7 @@ struct SearchBar: View {
                         ForEach(SearchViewModel.SearchCategory.allCases, id: \.self) { cat in
                             Button {
                                 vm.searxCategory = cat
-                                if !vm.searxResults.isEmpty { Task { await vm.search() } }
+                                if !vm.searxResults.isEmpty { vm.startSearch() }
                             } label: {
                                 Label(cat.label, systemImage: cat.icon)
                                     .font(.caption.weight(.medium))
