@@ -322,6 +322,8 @@ class SearchViewModel {
                 default: break
                 }
             }
+        } catch is CancellationError {
+            // Task cancelled — partial response already displayed, nothing to overwrite
         } catch {
             await MainActor.run { messages[msgIndex].response = "Error: \(error.localizedDescription)" }
         }
@@ -413,6 +415,8 @@ class SearchViewModel {
                 searxTotalResults = Int(resp.number_of_results ?? 0)
                 searxIsSearching = false
             }
+        } catch is CancellationError {
+            await MainActor.run { searxIsSearching = false }
         } catch {
             await MainActor.run { errorMessage = error.localizedDescription; searxIsSearching = false }
         }
